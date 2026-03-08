@@ -1,0 +1,85 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: logging
+  labels:
+    app.kubernetes.io/name: logging
+
+---
+# Admin credentials — username + password both base64 encoded
+# echo -n 'admin' | base64        = YWRtaW4=
+# echo -n 'Admin@12345!' | base64 = QWRtaW5AMTIzNDUh
+apiVersion: v1
+kind: Secret
+metadata:
+  name: opensearch-admin-credentials
+  namespace: logging
+type: Opaque
+data:
+  username: YWRtaW4=
+  password: QWRtaW5AMTIzNDUh
+
+---
+apiVersion: opensearch.org/v1
+kind: OpenSearchCluster
+metadata:
+  name: opensearch-cluster
+  namespace: logging
+spec:
+  general:
+    serviceName: opensearch-cluster
+    version: "2.13.0"
+    httpPort: 9200
+    drainDataNodes: true
+    setVMMaxMapCount: true
+
+  security:
+    tls:
+      transport:
+        generate: true
+        perNode: true
+      http:
+        generate: true
+    config:
+      adminCredentialsSecret:
+        name: opensearch-admin-credentials
+
+  dashboards:
+    enable: true
+    version: "2.13.0"
+    replicas: 1
+    opensearchCredentialsSecret:
+      name: opensearch-admin-credentials
+    resources:
+      requests:
+        memory: "512Mi"
+        cpu: "200m"
+      limits:
+        memory: "1Gi"
+        cpu: "500m"
+
+  nodePools:
+    # Operator requires minimum 3 nodes with cluster_manager role for quorum
+    - component: nodes
+      replicas: 3
+      diskSize: "5Gi"
+      resources:
+        requests:
+          memory: "512Mi"
+          cpu: "300m"
+        limits:
+          memory: "1Gi"
+          cpu: "500m"
+      roles:
+        - cluster_manager
+        - data
+        - ingest
+      persistence:
+        pvc:
+          storageClass: "standard"
+          accessModes:
+            - ReadWriteOnce
+      env:
+        - name: OPENSEARCH_JAVA_OPTS
+          value: "-Xms256m -Xmx256m"

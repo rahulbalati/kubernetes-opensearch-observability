@@ -1,0 +1,253 @@
+---
+# ============================================================
+# FLUENT BIT — LOG COLLECTOR
+# Convention used throughout:
+#   app name  : fluent-bit
+#   namespace : logging
+#   pattern   : <app>-<resource-type>
+# ============================================================
+
+# 1. SERVICE ACCOUNT
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: fluent-bit-sa                    
+  namespace: logging
+  labels:
+    app.kubernetes.io/name: fluent-bit
+    app.kubernetes.io/component: log-collector
+    app.kubernetes.io/part-of: logging
+
+---
+# 2. CLUSTER ROLE
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: fluent-bit-cluster-role         
+  labels:
+    app.kubernetes.io/name: fluent-bit
+    app.kubernetes.io/part-of: logging
+rules:
+  - apiGroups: [""]
+    resources: [pods, nodes, namespaces, nodes/proxy]
+    verbs: [get, list, watch]
+
+---
+# 3. CLUSTER ROLE BINDING
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: fluent-bit-cluster-role-binding   
+  labels:
+    app.kubernetes.io/name: fluent-bit
+    app.kubernetes.io/part-of: logging
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: fluent-bit-cluster-role           # must match ClusterRole above
+subjects:
+  - kind: ServiceAccount
+    name: fluent-bit-sa                   # must match ServiceAccount above
+    namespace: logging
+
+---
+# 4. CONFIG MAP
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fluent-bit-config                 # <app>-config
+  namespace: logging
+  labels:
+    app.kubernetes.io/name: fluent-bit
+    app.kubernetes.io/component: log-collector
+    app.kubernetes.io/part-of: logging
+data:
+  fluent-bit.conf: |
+    [SERVICE]
+        Flush         5
+        Daemon        Off
+        Log_Level     info
+        Parsers_File  parsers.conf
+        HTTP_Server   On
+        HTTP_Listen   0.0.0.0
+        HTTP_Port     2020
+
+    [INPUT]
+        Name              tail
+        Tag               kube.*
+        Path              /var/log/containers/*.log
+        Parser            docker
+        DB                /var/log/flb_kube.db
+        Mem_Buf_Limit     50MB
+        Skip_Long_Lines   On
+        Refresh_Interval  10
+
+    [FILTER]
+        Name                kubernetes
+        Match               kube.*
+        Kube_URL            https://kubernetes.default.svc:443
+        Kube_CA_File        /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        Kube_Token_File     /var/run/secrets/kubernetes.io/serviceaccount/token
+        Kube_Tag_Prefix     kube.var.log.containers.
+        Merge_Log           On
+        Merge_Log_Key       log_processed
+        K8S-Logging.Parser  On
+        K8S-Logging.Exclude On
+        Annotations         Off
+        Labels              On
+
+    # Only forward logs from the sample-app namespace
+    [FILTER]
+        Name    grep
+        Match   kube.*
+        Regex   kubernetes['namespace_name'] sample-app
+
+    [FILTER]
+        Name          nest
+        Match         kube.*
+        Operation     nest
+        Wildcard      kubernetes*
+        Nest_under    kubernetes
+        Remove_prefix kubernetes.
+
+    [OUTPUT]
+        Name                opensearch
+        Match               kube.*
+        Host                opensearch-cluster.logging.svc.cluster.local
+        Port                9200
+        Logstash_Format     On
+        Logstash_Prefix     sample-app-logs
+        Logstash_DateFormat %Y.%m.%d
+        tls                 On
+        tls.verify          Off
+        HTTP_User           admin
+        HTTP_Passwd         Admin@12345!
+        Suppress_Type_Name  On
+        Replace_Dots        On
+        Retry_Limit         False
+        Buffer_Size         5MB
+        Trace_Error         On
+
+  parsers.conf: |
+    [PARSER]
+        Name        docker
+        Format      json
+        Time_Key    time
+        Time_Format %Y-%m-%dT%H:%M:%S.%L
+        Time_Keep   On
+
+    [PARSER]
+        Name        cri
+        Format      regex
+        Regex       ^(?<time>[^ ]+) (?<stream>stdout|stderr) (?<logtag>[^ ]*) (?<message>.*)$
+        Time_Key    time
+        Time_Format %Y-%m-%dT%H:%M:%S.%L%z
+
+    [PARSER]
+        Name        json
+        Format      json
+        Time_Key    timestamp
+        Time_Format %Y-%m-%dT%H:%M:%SZ
+        Time_Keep   On
+
+---
+# 5. DAEMON SET
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: fluent-bit-ds                     # <app>-ds
+  namespace: logging
+  labels:
+    app.kubernetes.io/name: fluent-bit
+    app.kubernetes.io/component: log-collector
+    app.kubernetes.io/part-of: logging
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: fluent-bit
+      app.kubernetes.io/component: log-collector
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: fluent-bit
+        app.kubernetes.io/component: log-collector
+        app.kubernetes.io/part-of: logging
+    spec:
+      serviceAccountName: fluent-bit-sa   # must match ServiceAccount above
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+        - key: node-role.kubernetes.io/master
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: fluent-bit
+          image: fluent/fluent-bit:3.0
+          ports:
+            - name: metrics
+              containerPort: 2020
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: 2020
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: 2020
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          volumeMounts:
+            - name: fluent-bit-config-vol 
+              mountPath: /fluent-bit/etc/
+            - name: varlog-vol            
+              mountPath: /var/log
+            - name: docker-containers-vol
+              mountPath: /var/lib/docker/containers
+              readOnly: true
+            - name: machine-id-vol
+              mountPath: /etc/machine-id
+              readOnly: true
+      volumes:
+        - name: fluent-bit-config-vol      # matches volumeMount above
+          configMap:
+            name: fluent-bit-config        # must match ConfigMap above
+        - name: varlog-vol
+          hostPath:
+            path: /var/log
+        - name: docker-containers-vol
+          hostPath:
+            path: /var/lib/docker/containers
+        - name: machine-id-vol
+          hostPath:
+            path: /etc/machine-id
+            type: File
+
+---
+# 6. SERVICE  (metrics endpoint for Prometheus scraping)
+apiVersion: v1
+kind: Service
+metadata:
+  name: fluent-bit-svc                    # <app>-svc
+  namespace: logging
+  labels:
+    app.kubernetes.io/name: fluent-bit
+    app.kubernetes.io/component: log-collector
+    app.kubernetes.io/part-of: logging
+spec:
+  selector:
+    app.kubernetes.io/name: fluent-bit
+    app.kubernetes.io/component: log-collector
+  ports:
+    - name: metrics
+      port: 2020
+      targetPort: metrics
