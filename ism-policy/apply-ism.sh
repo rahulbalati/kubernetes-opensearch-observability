@@ -4,10 +4,10 @@
 # Run AFTER OpenSearch is healthy.
 set -euo pipefail
 
-OPENSEARCH_URL="${OPENSEARCH_URL:-https://localhost:9200}"
+OPENSEARCH_URL="${OPENSEARCH_URL:-http://opensearch.local}"
 USER="${OPENSEARCH_USER:-admin}"
 PASS="${OPENSEARCH_PASS:-admin}"
-CURL="curl -sk -u ${USER}:${PASS}"
+CURL="curl -s -u ${USER}:${PASS}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "==> [1/3] Waiting for OpenSearch to be ready..."
@@ -45,4 +45,4 @@ $CURL "${OPENSEARCH_URL}/_index_template/sample-app-logs-template" | python3 -m 
 
 echo ""
 echo "==> To check policy on existing indices:"
-echo "    curl -sk -u admin:admin ${OPENSEARCH_URL}/_plugins/_ism/explain/sample-app-logs-* | python3 -m json.tool"
+echo "    curl -s -u admin:'Admin@12345!' ${OPENSEARCH_URL}/_plugins/_ism/explain/sample-app-logs-* | python3 -m json.tool"

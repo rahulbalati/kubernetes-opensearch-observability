@@ -83,3 +83,84 @@ spec:
       env:
         - name: OPENSEARCH_JAVA_OPTS
           value: "-Xms256m -Xmx256m"
+
+
+
+---
+# ============================================================
+# INGRESS — OpenSearch Dashboards
+# Routes: http://dashboards.local → opensearch-cluster-dashboards:5601
+# The operator creates the dashboards service as:
+#   <spec.general.serviceName>-dashboards  → opensearch-cluster-dashboards
+# Add to /etc/hosts: 127.0.0.1  dashboards.local
+# ============================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: opensearch-dashboards-ingress
+  namespace: logging
+  labels:
+    app.kubernetes.io/name: opensearch-dashboards
+    app.kubernetes.io/part-of: opensearch
+  annotations:
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: dashboards.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: opensearch-cluster-dashboards   # operator naming: <serviceName>-dashboards
+                port:
+                  number: 5601
+
+---
+# ============================================================
+# INGRESS — OpenSearch REST API
+# Routes: http://opensearch.local → opensearch-cluster:9200
+# Useful for curl / client access without port-forward
+# Add to /etc/hosts: 127.0.0.1  opensearch.local
+# ============================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: opensearch-api-ingress
+  namespace: logging
+  labels:
+    app.kubernetes.io/name: opensearch
+    app.kubernetes.io/part-of: opensearch
+  annotations:
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+    nginx.ingress.kubernetes.io/ssl-passthrough: "false"
+    nginx.ingress.kubernetes.io/proxy-ssl-verify: "false"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: opensearch.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: opensearch-cluster   # the main cluster service on port 9200
+                port:
+                  number: 9200
+
+
+
+
+
+
+
+
+
+
+

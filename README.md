@@ -58,6 +58,9 @@ Verify:
 
 ```bash
 kubectl cluster-info --context kind-observability
+kubectl get nodes
+# NAME                        STATUS   ROLES           AGE
+# observability-control-plane Ready    control-plane   30s
 ```
 
 ---
@@ -84,7 +87,7 @@ kubectl apply -f infrastructure/storage-class.yaml
 
 ### Step 3 — Deploy the nginx Ingress Controller
 
-#### Option A — Via Helm 
+#### Option A — Via Helm
 
 ```bash
 helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
@@ -111,6 +114,14 @@ kubectl wait --namespace ingress-nginx \
   --timeout=120s
 ```
 
+Confirm the Ingress Controller is running and IngressClass is registered:
+
+```bash
+kubectl get pods -n ingress-nginx
+kubectl get ingressclass
+# NAME    CONTROLLER             DEFAULT
+# nginx   k8s.io/ingress-nginx   true
+```
 
 ---
 
@@ -136,18 +147,15 @@ kubectl wait --namespace cert-manager \
 ### Step 5 — Install the OpenSearch Operator
 
 ```bash
-# Add the opensearch-operator Helm repo
 helm repo add opensearch-operator https://opensearch-project.github.io/opensearch-k8s-operator/
 helm repo update
 
-# Install the operator into the logging namespace
 helm install opensearch-operator opensearch-operator/opensearch-operator \
   --namespace logging \
   --create-namespace \
   --wait
 
-# Confirm the operator pod is Running
-kubectl get pods -n logging 
+kubectl get pods -n logging
 ```
 
 ---
@@ -156,6 +164,17 @@ kubectl get pods -n logging
 
 ```bash
 kubectl apply -f opensearch/opensearch-cluster.yaml
+```
+
+This also creates two Ingress rules:
+- `opensearch.local` → OpenSearch REST API on port 9200
+- `dashboards.local` → OpenSearch Dashboards on port 5601
+
+Add all hostnames to `/etc/hosts` so they resolve locally:
+
+```bash
+# macOS / Linux
+sudo sh -c 'echo "127.0.0.1  app.local opensearch.local dashboards.local" >> /etc/hosts'
 ```
 
 Watch pods come up (takes 2-4 minutes):
@@ -172,13 +191,11 @@ opensearch-cluster-nodes-2             1/1   Running
 opensearch-cluster-dashboards-xxxx     1/1   Running
 ```
 
-Port-forward and verify cluster health:
+Verify cluster health via Ingress:
 
 ```bash
-kubectl port-forward svc/opensearch-cluster -n logging 9200:9200 &
-
-curl -sk -u admin:'Admin@12345!' \
-  https://localhost:9200/_cluster/health \
+curl -s -u admin:'Admin@12345!' \
+  http://opensearch.local/_cluster/health \
   | python3 -m json.tool
 ```
 
@@ -206,6 +223,17 @@ Expected:
 {"timestamp":"2026-03-08T10:00:01Z","level":"INFO","service":"auth","message":"Request processed","request_id":"req-00001","latency_ms":123}
 ```
 
+Verify traffic routes through the Ingress Controller:
+
+```bash
+kubectl get ingress -n sample-app
+# NAME                    CLASS   HOSTS       ADDRESS     PORTS
+# log-generator-ingress   nginx   app.local   localhost   80
+
+curl -s http://app.local | grep -o "<title>.*</title>"
+# <title>Welcome to nginx!</title>
+```
+
 ---
 
 ### Step 8 — Deploy Fluent Bit
@@ -223,8 +251,8 @@ kubectl get pods -n logging -l app.kubernetes.io/name=fluent-bit
 Wait 30 seconds then confirm logs are arriving in OpenSearch:
 
 ```bash
-curl -sk -u admin:'Admin@12345!' \
-  "https://localhost:9200/sample-app-logs-*/_count" \
+curl -s -u admin:'Admin@12345!' \
+  "http://opensearch.local/sample-app-logs-*/_count" \
   | python3 -m json.tool
 ```
 
@@ -234,13 +262,13 @@ Expected: `"count"` greater than 0.
 
 ### Step 9 — Apply the 2-Day ISM Policy
 
-#### Option A — Via manual 
+#### Option A — Manual
 
 #### 9a. Create the ISM Policy
 
 ```bash
-curl -sk -u admin:'Admin@12345!' \
-  -X PUT "https://localhost:9200/_plugins/_ism/policies/sample-app-2day-retention" \
+curl -s -u admin:'Admin@12345!' \
+  -X PUT "http://opensearch.local/_plugins/_ism/policies/sample-app-2day-retention" \
   -H "Content-Type: application/json" \
   -d @ism-policy/ism-policy.json \
   | python3 -m json.tool
@@ -252,10 +280,9 @@ Expected: `"_id": "sample-app-2day-retention"`
 
 #### 9b. Create the Index Template
 
-
 ```bash
-curl -sk -u admin:'Admin@12345!' \
-  -X PUT "https://localhost:9200/_index_template/sample-app-logs-template" \
+curl -s -u admin:'Admin@12345!' \
+  -X PUT "http://opensearch.local/_index_template/sample-app-logs-template" \
   -H "Content-Type: application/json" \
   -d @ism-policy/index-template.json \
   | python3 -m json.tool
@@ -268,8 +295,8 @@ Expected: `"acknowledged": true`
 #### 9c. Attach the Policy to the Existing Index
 
 ```bash
-curl -sk -u admin:'Admin@12345!' \
-  -X POST "https://localhost:9200/_plugins/_ism/add/sample-app-logs-$(date +%Y.%m.%d)" \
+curl -s -u admin:'Admin@12345!' \
+  -X POST "http://opensearch.local/_plugins/_ism/add/sample-app-logs-$(date +%Y.%m.%d)" \
   -H "Content-Type: application/json" \
   -d '{"policy_id": "sample-app-2day-retention"}' \
   | python3 -m json.tool
@@ -279,25 +306,26 @@ Expected: `"updated_indices": 1, "failures": false`
 
 ---
 
-#### Option B — Via script apply-ism.sh 
+#### Option B — Via script apply-ism.sh
 
+```bash
 chmod +x ism-policy/apply-ism.sh
 
-```bash 
-OPENSEARCH_URL=https://localhost:9200 \
+OPENSEARCH_URL=http://opensearch.local \
 OPENSEARCH_USER=admin \
 OPENSEARCH_PASS='Admin@12345!' \
   ./ism-policy/apply-ism.sh
 ```
 
+---
 
 ### Step 10 — Verify Everything
 
 #### ISM Policy exists
 
 ```bash
-curl -sk -u admin:'Admin@12345!' \
-  "https://localhost:9200/_plugins/_ism/policies/sample-app-2day-retention" \
+curl -s -u admin:'Admin@12345!' \
+  "http://opensearch.local/_plugins/_ism/policies/sample-app-2day-retention" \
   | python3 -m json.tool
 ```
 
@@ -306,8 +334,8 @@ curl -sk -u admin:'Admin@12345!' \
 Wait 2-3 minutes after Step 9c, then run:
 
 ```bash
-curl -sk -u admin:'Admin@12345!' \
-  "https://localhost:9200/_plugins/_ism/explain/sample-app-logs-*" \
+curl -s -u admin:'Admin@12345!' \
+  "http://opensearch.local/_plugins/_ism/explain/sample-app-logs-*" \
   | python3 -m json.tool
 ```
 
@@ -324,18 +352,23 @@ Expected:
 }
 ```
 
-#### OpenSearch Dashboards (Visual Proof)
+#### Confirm all Ingress rules are registered
 
 ```bash
-kubectl port-forward svc/opensearch-cluster-dashboards -n logging 5601:5601 &
+kubectl get ingress -A
+# NAMESPACE    NAME                           CLASS   HOSTS              ADDRESS     PORTS
+# sample-app   log-generator-ingress          nginx   app.local          localhost   80
+# logging      opensearch-dashboards-ingress  nginx   dashboards.local   localhost   80
+# logging      opensearch-api-ingress         nginx   opensearch.local   localhost   80
 ```
 
-Open http://localhost:5601 — login with `admin / Admin@12345!`
+#### OpenSearch Dashboards
+
+Open **http://dashboards.local** — login with `admin / Admin@12345!`
 
 Navigate to: **Menu → Index Management → State management policies**
 
 You will see `sample-app-2day-retention` listed with `sample-app-logs-*` pattern attached.
-
 
 ---
 

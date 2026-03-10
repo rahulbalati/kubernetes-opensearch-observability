@@ -13,7 +13,7 @@ metadata:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: ingress-nginx-sa        
+  name: ingress-nginx-sa
   namespace: ingress-nginx
   labels:
     app.kubernetes.io/name: ingress-nginx
@@ -25,7 +25,7 @@ metadata:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: ingress-nginx-cluster-role  
+  name: ingress-nginx-cluster-role
   labels:
     app.kubernetes.io/name: ingress-nginx
     app.kubernetes.io/part-of: ingress-nginx
@@ -60,17 +60,17 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: ingress-nginx-cluster-role-binding 
+  name: ingress-nginx-cluster-role-binding
   labels:
     app.kubernetes.io/name: ingress-nginx
     app.kubernetes.io/part-of: ingress-nginx
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: ingress-nginx-cluster-role           # must match ClusterRole above
+  name: ingress-nginx-cluster-role # must match ClusterRole above
 subjects:
   - kind: ServiceAccount
-    name: ingress-nginx-sa                   # must match ServiceAccount above
+    name: ingress-nginx-sa # must match ServiceAccount above
     namespace: ingress-nginx
 
 ---
@@ -78,7 +78,7 @@ subjects:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: ingress-nginx-role        
+  name: ingress-nginx-role
   namespace: ingress-nginx
   labels:
     app.kubernetes.io/name: ingress-nginx
@@ -102,7 +102,7 @@ rules:
     verbs: [update]
   - apiGroups: [""]
     resources: [configmaps]
-    resourceNames: [ingress-nginx-leader]    # consistent with election-id arg below
+    resourceNames: [ingress-nginx-leader] # consistent with election-id arg below
     verbs: [get, update]
   - apiGroups: [""]
     resources: [configmaps]
@@ -116,7 +116,7 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: ingress-nginx-role-binding  
+  name: ingress-nginx-role-binding
   namespace: ingress-nginx
   labels:
     app.kubernetes.io/name: ingress-nginx
@@ -124,10 +124,10 @@ metadata:
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: ingress-nginx-role           # must match Role above
+  name: ingress-nginx-role # must match Role above
 subjects:
   - kind: ServiceAccount
-    name: ingress-nginx-sa           # must match ServiceAccount above
+    name: ingress-nginx-sa # must match ServiceAccount above
     namespace: ingress-nginx
 
 ---
@@ -135,7 +135,7 @@ subjects:
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: ingress-nginx-controller-config   
+  name: ingress-nginx-controller-config
   namespace: ingress-nginx
   labels:
     app.kubernetes.io/name: ingress-nginx
@@ -163,7 +163,7 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: ingress-nginx-controller     
+  name: ingress-nginx-controller
   namespace: ingress-nginx
   labels:
     app.kubernetes.io/name: ingress-nginx
@@ -182,17 +182,18 @@ spec:
         app.kubernetes.io/component: controller
         app.kubernetes.io/part-of: ingress-nginx
     spec:
-      serviceAccountName: ingress-nginx-sa          # matches ServiceAccount above
+      hostNetwork: true
+      serviceAccountName: ingress-nginx-sa # matches ServiceAccount above
       terminationGracePeriodSeconds: 300
       containers:
         - name: controller
           image: registry.k8s.io/ingress-nginx/controller:v1.10.1
           args:
             - /nginx-ingress-controller
-            - --election-id=ingress-nginx-leader            # matches resourceName in Role
+            - --election-id=ingress-nginx-leader # matches resourceName in Role
             - --controller-class=k8s.io/ingress-nginx
             - --ingress-class=nginx
-            - --configmap=$(POD_NAMESPACE)/ingress-nginx-controller-config  # matches ConfigMap
+            - --configmap=$(POD_NAMESPACE)/ingress-nginx-controller-config # matches ConfigMap
           env:
             - name: POD_NAME
               valueFrom:
@@ -207,9 +208,11 @@ spec:
           ports:
             - name: http
               containerPort: 80
+              hostPort: 80
               protocol: TCP
             - name: https
               containerPort: 443
+              hostPort: 443
               protocol: TCP
             - name: webhook
               containerPort: 8443
@@ -239,14 +242,14 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: ingress-nginx-controller-svc  
+  name: ingress-nginx-controller-svc
   namespace: ingress-nginx
   labels:
     app.kubernetes.io/name: ingress-nginx
     app.kubernetes.io/component: controller
     app.kubernetes.io/part-of: ingress-nginx
 spec:
-  type: LoadBalancer
+  type: NodePort
   selector:
     app.kubernetes.io/name: ingress-nginx
     app.kubernetes.io/component: controller
